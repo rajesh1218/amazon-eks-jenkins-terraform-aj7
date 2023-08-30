@@ -1,0 +1,72 @@
+pipeline {
+    agent any
+    tools {
+       jdk "jdk11"
+       maven "maven3" 
+    }
+    stages {
+        stage('clen workspace') {
+            steps {
+                cleanWs()
+            }
+        }
+        stage('SCM Checkout') {
+            steps {
+                checkout scmGit(branches: [[name: '*/master']], extensions: [], userRemoteConfigs: [[url: 'https://github.com/rajesh1218/amazon-eks-jenkins-terraform-aj7.git']])
+            }
+        }
+        stage('maven compile') {
+            steps {
+                sh 'mvn clean compile'
+            }
+        }
+        stage('sonarqube analysis') {
+            steps {
+              script {
+                withSonarQubeEnv(credentialsId: 'sonar-token') {
+                   sh 'mvn sonar:sonar'
+                 }
+              }
+            }
+        }
+        stage('quality gate cheking') {
+            steps {
+              script {
+                  waitForQualityGate abortPipeline: false, credentialsId: 'Sonar-token' 
+                }
+            }
+        }
+        stage("OWASP Dependency Check"){
+            steps{
+                dependencyCheck additionalArguments: '--scan ./ --format HTML ', odcInstallation: 'DP-Check'
+                dependencyCheckPublisher pattern: '**/dependency-check-report.xml'
+            }
+        }
+        stage("Build"){
+            steps{
+                sh " mvn clean install"
+            }
+        }
+        stage('Docker Build And Push') {
+            steps {
+              script {
+                   withDockerRegistry(credentialsId: 'docker-cred' , toolName: 'docker') {
+                      sh "docker build -t petclinic1 ."
+                      sh "docker tag petclinic1 rajesh1218/pet-clinic123:latest "
+                      sh "docker push rajesh1218/pet-clinic123:latest "
+                    }
+                }
+            }
+        }
+        stage("Trivy Image scan"){
+            steps{
+                sh "trivy image rajesh1218/pet-clinic123:latest"
+            }
+        }
+        stage("deploy to conatiner"){
+            steps{
+                sh "docker run -d --name pet -p 8082:8080 rajesh1218/pet-clinic123:latest"  
+            }
+        }
+    }
+}
